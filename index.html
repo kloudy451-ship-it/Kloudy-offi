@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#000810">
+    <link rel="manifest" href="manifest.json">
+    <title>Coder PRO v11.3</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/editor/editor.main.min.css">
+    
+    <style>
+        :root { --accent: #00d2ff; --bg: #000810; --panel: rgba(0, 10, 25, 0.98); --err: #ff4b4b; --success: #00ff41; }
+        body { 
+            margin: 0; background: var(--bg); color: #fff; font-family: 'Consolas', monospace; 
+            height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+            background-image: url('https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop');
+            background-size: cover; background-position: center;
+        }
+
+        /* Экран блокировки */
+        #auth-screen {
+            position: fixed; inset: 0; background: rgba(0, 5, 15, 0.98); backdrop-filter: blur(20px);
+            z-index: 10000; display: flex; justify-content: center; align-items: center; transition: 0.5s;
+        }
+        .auth-box { border: 1px solid var(--accent); padding: 40px; border-radius: 4px; text-align: center; }
+        input[type="tel"] { background: transparent; border: 1px solid var(--accent); color: var(--accent); padding: 10px; font-size: 24px; width: 150px; text-align: center; outline: none; border-radius: 4px; }
+        
+        /* Основной интерфейс */
+        header { background: var(--panel); padding: 8px 15px; border-bottom: 1px solid var(--accent); display: flex; justify-content: space-between; align-items: center; }
+        #workspace { display: flex; flex: 1; overflow: hidden; position: relative; }
+        #sidebar { width: 160px; background: rgba(0,0,0,0.85); border-right: 1px solid rgba(0,210,255,0.2); display: flex; flex-direction: column; }
+        #editor { flex: 1; }
+        
+        #terminal { height: 150px; background: #000; border-top: 1px solid var(--accent); overflow-y: auto; padding: 10px; font-size: 11px; }
+        .file-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #111; font-size: 12px; transition: 0.2s; }
+        .file-item.active { background: rgba(0, 210, 255, 0.15); border-left: 3px solid var(--accent); }
+        
+        .btn { background: rgba(0, 210, 255, 0.05); color: var(--accent); border: 1px solid var(--accent); padding: 5px 12px; cursor: pointer; font-size: 11px; }
+        .btn-run { background: var(--accent); color: #000; font-weight: bold; }
+
+        #preview-container { width: 0; transition: 0.4s; background: #fff; position: relative; }
+        #preview-container.active { width: 50%; border-left: 2px solid var(--accent); }
+        iframe { width: 100%; height: 100%; border: none; }
+
+        @media (max-width: 600px) { #preview-container.active { width: 100%; position: absolute; z-index: 500; } }
+        .shake { animation: shake 0.3s; }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(10px); } 75% { transform: translateX(-10px); } }
+    </style>
+</head>
+<body>
+
+<div id="auth-screen">
+    <div class="auth-box">
+        <div style="letter-spacing: 5px; color: var(--accent); margin-bottom: 20px;">CODER_PRO_OS</div>
+        <input type="tel" id="pass-field" placeholder="PIN" autocomplete="off">
+        <div id="auth-err" style="color: var(--err); font-size: 10px; margin-top: 10px; display: none;">INVALID_PIN</div>
+        <div style="margin-top: 20px;"><button class="btn" onclick="handleAuth()">UNLOCК</button></div>
+    </div>
+</div>
+
+<div id="main-ui" style="display:none; flex-direction: column; height: 100vh;">
+    <header>
+        <div id="status-line" style="font-size: 11px; color: var(--accent);">STATUS: <span style="color:#fff">ONLINE</span></div>
+        <div style="display: flex; gap: 8px;">
+            <input type="color" id="cp" oninput="applyColor(this.value)">
+            <button class="btn" onclick="createNewFile()">+ FILE</button>
+            <button class="btn btn-run" onclick="buildAndRun()">RUN ▶</button>
+        </div>
+    </header>
+
+    <div id="workspace">
+        <div id="sidebar"><div id="file-list"></div></div>
+        <div id="editor"></div>
+        <div id="preview-container">
+            <button onclick="togglePreview()" style="position: absolute; right: 10px; top: 10px; z-index: 600; background: var(--err); color: #fff; border: none; padding: 5px;">CLOSE</button>
+            <iframe id="preview-frame"></iframe>
+        </div>
+    </div>
+    <div id="terminal"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
+<script src="https://unpkg.com/emmet-monaco-es/dist/emmet-monaco.js"></script>
+
+<script>
+    // Хэш пароля "3268"
+    const AUTH_HASH = "858e388703f8229b132801e05d93378546f3330364f9b8c0a876a40a233b664d";
+    let editor, currentBlobUrl;
+    let currentFile = 'index.html';
+    let files = JSON.parse(localStorage.getItem('vfs_v11')) || {
+        'index.html': { content: '<h1>Coder PRO</h1>', lang: 'html' },
+        'style.css': { content: 'body { background: #000; color: cyan; }', lang: 'css' }
+    };
+
+    async function sha256(str) {
+        const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+        return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function handleAuth() {
+        const val = document.getElementById('pass-field').value;
+        if (await sha256(val) === AUTH_HASH) {
+            document.getElementById('auth-screen').style.display = 'none';
+            document.getElementById('main-ui').style.display = 'flex';
+            initApp();
+        } else {
+            document.querySelector('.auth-box').classList.add('shake');
+            document.getElementById('auth-err').style.display = 'block';
+            setTimeout(() => document.querySelector('.auth-box').classList.remove('shake'), 300);
+        }
+    }
+
+    function initApp() {
+        require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' } });
+        require(['vs/editor/editor.main'], function() {
+            editor = monaco.editor.create(document.getElementById('editor'), {
+                value: files[currentFile].content,
+                language: files[currentFile].lang,
+                theme: 'vs-dark',
+                automaticLayout: true
+            });
+
+            // Подключаем Emmet
+            emmetMonaco.emmetHTML(monaco);
+
+            editor.onDidChangeModelContent(() => {
+                files[currentFile].content = editor.getValue();
+                localStorage.setItem('vfs_v11', JSON.stringify(files));
+            });
+            renderFiles();
+        });
+    }
+
+    function renderFiles() {
+        const list = document.getElementById('file-list');
+        list.innerHTML = '';
+        Object.keys(files).forEach(name => {
+            const div = document.createElement('div');
+            div.className = `file-item ${name === currentFile ? 'active' : ''}`;
+            div.innerText = name;
+            div.onclick = () => {
+                currentFile = name;
+                editor.setValue(files[name].content);
+                monaco.editor.setModelLanguage(editor.getModel(), files[name].lang);
+                renderFiles();
+            };
+            list.appendChild(div);
+        });
+    }
+
+    function buildAndRun() {
+        if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+        let html = files['index.html'].content;
+        const css = Object.keys(files).filter(f => f.endsWith('.css')).map(f => files[f].content).join('\n');
+        const js = Object.keys(files).filter(f => f.endsWith('.js')).map(f => files[f].content).join('\n');
+
+        const final = `<html><head><style>${css}</style></head><body>${html}<script>${js}<\/script></body></html>`;
+        const blob = new Blob([final], { type: 'text/html' });
+        currentBlobUrl = URL.createObjectURL(blob);
+        document.getElementById('preview-frame').src = currentBlobUrl;
+        document.getElementById('preview-container').classList.add('active');
+    }
+
+    function togglePreview() { document.getElementById('preview-container').classList.remove('active'); }
+    function applyColor(v) { editor.executeEdits("", [{ range: editor.getSelection(), text: v }]); }
+    
+    // Регистрация SW для PWA
+    if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
+</script>
+</body>
+</html>
