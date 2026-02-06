@@ -3,68 +3,167 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Coder PRO v11.5 - Open</title>
+    <title>Coder PRO v11.6</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/editor/editor.main.min.css">
     <style>
-        :root { --accent: #00d2ff; --bg: #000810; --panel: rgba(0, 15, 30, 0.95); }
+        :root { --accent: #00d2ff; --bg: #000810; --panel: rgba(0, 15, 30, 0.98); --err: #ff4b4b; --success: #00ff41; }
         body { 
-            margin: 0; background: var(--bg); color: #fff; font-family: monospace; 
-            height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+            margin: 0; background: var(--bg); color: #fff; font-family: 'Consolas', monospace; 
+            height: 100vh; overflow: hidden; display: flex; flex-direction: column;
             background-image: url('https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop');
             background-size: cover;
         }
-        header { background: var(--panel); padding: 10px; border-bottom: 1px solid var(--accent); display: flex; justify-content: space-between; align-items: center; }
+        header { background: var(--panel); padding: 8px 15px; border-bottom: 1px solid var(--accent); display: flex; justify-content: space-between; align-items: center; z-index: 10; }
+        
         #workspace { display: flex; flex: 1; overflow: hidden; }
+        
+        /* Боковая панель файлов */
+        #sidebar { width: 160px; background: rgba(0,0,0,0.8); border-right: 1px solid rgba(0,210,255,0.2); display: flex; flex-direction: column; }
+        .file-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #111; font-size: 12px; transition: 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .file-item:hover { background: rgba(0,210,255,0.1); }
+        .file-item.active { background: rgba(0, 210, 255, 0.2); border-left: 3px solid var(--accent); }
+
         #editor { flex: 1; }
-        .btn { background: var(--accent); color: #000; border: none; padding: 5px 15px; cursor: pointer; font-weight: bold; border-radius: 2px; }
-        #terminal { height: 120px; background: #000; border-top: 1px solid var(--accent); padding: 10px; font-size: 12px; overflow-y: auto; }
+        
+        /* Терминал */
+        #terminal { height: 140px; background: rgba(0,0,0,0.9); border-top: 1px solid var(--accent); padding: 10px; font-size: 11px; overflow-y: auto; color: #e0f7ff; }
+        .log-error { color: var(--err); }
+        .log-success { color: var(--success); }
+
+        .btn { background: rgba(0, 210, 255, 0.1); color: var(--accent); border: 1px solid var(--accent); padding: 5px 12px; cursor: pointer; font-size: 11px; border-radius: 2px; }
+        .btn-run { background: var(--accent); color: #000; font-weight: bold; }
+        
+        #preview-container { width: 0; transition: 0.4s; background: #fff; position: relative; }
+        #preview-container.active { width: 50%; border-left: 2px solid var(--accent); }
+        iframe { width: 100%; height: 100%; border: none; }
+
+        @media (max-width: 600px) { #sidebar { width: 100px; } #preview-container.active { width: 100%; position: absolute; z-index: 100; } }
     </style>
 </head>
 <body>
 
 <header>
-    <div style="color: var(--accent); font-weight: bold;">CODER_PRO_OPEN</div>
-    <div style="display: flex; gap: 10px;">
-        <button class="btn" onclick="buildAndRun()">RUN ▶</button>
+    <div style="color: var(--accent); font-weight: bold; font-size: 14px;">PRO_DECK <span style="color:#fff; font-size:10px;">v11.6</span></div>
+    <div style="display: flex; gap: 8px;">
+        <button class="btn" onclick="createNewFile()">+ FILE</button>
+        <button class="btn btn-run" onclick="buildAndRun()">RUN ▶</button>
     </div>
 </header>
 
 <div id="workspace">
+    <div id="sidebar">
+        <div id="file-list"></div>
+    </div>
     <div id="editor"></div>
+    <div id="preview-container">
+        <button onclick="closePreview()" style="position: absolute; right: 10px; top: 10px; z-index: 101; background: var(--err); color: #fff; border: none; padding: 5px 10px; cursor: pointer;">CLOSE</button>
+        <iframe id="preview-frame"></iframe>
+    </div>
 </div>
 
-<div id="terminal">> System initialized. No authentication required.</div>
+<div id="terminal"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
 
 <script>
-    // Инициализация сразу при загрузке
+    let editor, currentBlobUrl;
+    let currentFile = 'index.html';
+    
+    // Загрузка файлов из локального хранилища
+    let files = JSON.parse(localStorage.getItem('vfs_v11_open')) || {
+        'index.html': { content: '<h1>System Active</h1>\n<p>Попробуй изменить этот текст</p>', lang: 'html' },
+        'style.css': { content: 'body { background: #000; color: #00d2ff; text-align: center; padding-top: 50px; font-family: sans-serif; }', lang: 'css' }
+    };
+
+    // Инициализация редактора
     require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' } });
     require(['vs/editor/editor.main'], function() {
-        window.editor = monaco.editor.create(document.getElementById('editor'), {
-            value: "// Код защищен только твоей приватностью\nconsole.log('Hello World');",
-            language: 'javascript',
+        editor = monaco.editor.create(document.getElementById('editor'), {
+            value: files[currentFile].content,
+            language: files[currentFile].lang,
             theme: 'vs-dark',
-            automaticLayout: true
+            automaticLayout: true,
+            fontSize: 14,
+            minimap: { enabled: false }
         });
-        console.log("Editor ready.");
+
+        // Автосохранение
+        editor.onDidChangeModelContent(() => {
+            files[currentFile].content = editor.getValue();
+            localStorage.setItem('vfs_v11_open', JSON.stringify(files));
+        });
+
+        renderFiles();
+        logTerminal("System Online. Files loaded.", "success");
     });
 
-    function buildAndRun() {
-        const code = window.editor.getValue();
-        const term = document.getElementById('terminal');
-        try {
-            term.innerHTML = "> Executing...<br>";
-            // Перехват консоли для вывода в терминал
-            const oldLog = console.log;
-            console.log = (msg) => { term.innerHTML += `> ${msg}<br>`; };
-            
-            new Function(code)();
-            
-            console.log = oldLog;
-        } catch (err) {
-            term.innerHTML += `<span style="color:red">> Error: ${err.message}</span>`;
+    function logTerminal(msg, type = '') {
+        const t = document.getElementById('terminal');
+        const className = type === 'error' ? 'log-error' : (type === 'success' ? 'log-success' : '');
+        t.innerHTML += `<div class="${className}">> [${new Date().toLocaleTimeString()}] ${msg}</div>`;
+        t.scrollTop = t.scrollHeight;
+    }
+
+    function renderFiles() {
+        const list = document.getElementById('file-list');
+        list.innerHTML = '';
+        Object.keys(files).forEach(name => {
+            const div = document.createElement('div');
+            div.className = `file-item ${name === currentFile ? 'active' : ''}`;
+            div.innerText = name;
+            div.onclick = () => switchFile(name);
+            list.appendChild(div);
+        });
+    }
+
+    function switchFile(name) {
+        currentFile = name;
+        editor.setValue(files[name].content);
+        monaco.editor.setModelLanguage(editor.getModel(), files[name].lang);
+        renderFiles();
+    }
+
+    function createNewFile() {
+        const name = prompt("Введите имя файла (например, app.js):");
+        if (name && !files[name]) {
+            const ext = name.split('.').pop();
+            const langMap = { js: 'javascript', html: 'html', css: 'css', py: 'python' };
+            files[name] = { content: '', lang: langMap[ext] || 'plaintext' };
+            switchFile(name);
         }
+    }
+
+    function buildAndRun() {
+        logTerminal("Starting Build...");
+        try {
+            if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+
+            let html = files['index.html'] ? files['index.html'].content : 'index.html not found';
+            const css = Object.keys(files).filter(f => f.endsWith('.css')).map(f => files[f].content).join('\n');
+            const js = Object.keys(files).filter(f => f.endsWith('.js')).map(f => files[f].content).join('\n');
+
+            const finalSource = `
+                <html>
+                    <head><style>${css}</style></head>
+                    <body>
+                        ${html}
+                        <script>${js}<\/script>
+                    </body>
+                </html>`;
+
+            const blob = new Blob([finalSource], { type: 'text/html' });
+            currentBlobUrl = URL.createObjectURL(blob);
+            document.getElementById('preview-frame').src = currentBlobUrl;
+            document.getElementById('preview-container').classList.add('active');
+            logTerminal("Build Successful.", "success");
+        } catch (e) {
+            logTerminal("Build Error: " + e.message, "error");
+        }
+    }
+
+    function closePreview() {
+        document.getElementById('preview-container').classList.remove('active');
+        setTimeout(() => editor.layout(), 400);
     }
 </script>
 </body>
